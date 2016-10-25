@@ -13,5 +13,4 @@ Transfer rate: 14559.74 [Kbytes/sec] received
 
 I have tested through for possible 200 APIs in the small cache , and sees no explicit performance degradation. The current implementation is based on Kong-0.8.3, I would update it to up-to-date Kong implmentation(0.9.2 now) I think this implementation would need to be further checked and improved with its function and correctness. You could also improve it with your work. If you have done the following work, it is appreciated to let me know.
 
-taozijin@cn.ibm.com 
-taozj888@163.com
+taozijin@cn.ibm.com taozj888@163.com
