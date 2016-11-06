@@ -187,34 +187,6 @@ end
 
 
 --Trevor: use the host as the key to get the api from mru cache directly
-function _M.find_api_by_request_host_with_mru(req_headers)
-  local hosts_list = {}
-  for _, header_name in ipairs({"Host", constants.HEADERS.HOST_OVERRIDE}) do
-    local hosts = req_headers[header_name]
-    if hosts then
-      if type(hosts) == "string" then
-        hosts = {hosts}
-      end
-      -- for all values of this header, try to find an API using the apis_by_dns dictionnary
-      for _, host in ipairs(hosts) do
-        host = unpack(stringy.split(host, ":"))
-        table_insert(hosts_list, host)
-        -- Check mru cache
-        local mru_cache_key = mru_cache.api_key(host)
-        local mc_api = mru_cache.get(mru_cache_key)
-        if mc_api then 
-          ngx.log(ngx.DEBUG, "Trevor: find an entry in mru_cache for host "..host)
-          return mc_api, host
-        end
-        --else
-          --Lookup the wildcard entry in mru_cache 
-          --return nil, nil, hosts_list
-      end
-    end
-  end
-  return nil, nil, hosts_list
-end
-
 function _M.find_api_by_request_host_with_mru_and_wildcard(req_headers)
   local hosts_list = {}
   for _, header_name in ipairs({"Host", constants.HEADERS.HOST_OVERRIDE}) do
@@ -254,40 +226,6 @@ function _M.find_api_by_request_host_with_mru_and_wildcard(req_headers)
 end
 
 
-
---Trevor: find the api from mru cache apis by the host directly
-function _M.find_api_by_request_host_with_mru2(req_headers)
-  local hosts_list = {}
-  local mc_api_dics_key = mru_cache.all_apis_by_dict_key()
-  local api_dics = mru_cache.get(mc_api_dics_key)
-
-  if api_dics == nil then
-    return nil, nil, hosts_list
-  end
-
-  for _, header_name in ipairs({"Host", constants.HEADERS.HOST_OVERRIDE}) do
-    local hosts = req_headers[header_name]
-    if hosts then
-      if type(hosts) == "string" then
-        hosts = {hosts}
-      end
-      -- for all values of this header, try to find an API using the apis_by_dns dictionnary
-      for _, host in ipairs(hosts) do
-        host = unpack(stringy.split(host, ":"))
-        table_insert(hosts_list, host)
-        -- Check mru cache
-        if apis_dics[host] then
-          ngx.log(ngx.DEBUG, "Trevor: find an entry in mru_cache for host "..host)
-          return apis_dics[host], host
-        end
-        --else
-          --Lookup the wildcard entry in mru_cache 
-          --return nil, nil, hosts_list
-      end
-    end
-  end
-  return nil, nil, hosts_list
-end
 
 
 -- To do so, we have to compare entire URI segments (delimited by "/").
@@ -374,56 +312,6 @@ local function find_api(uri, headers)
 end
 
 
-local function find_api_with_mru(uri, headers)
-  local api, matched_host, hosts_list, strip_request_path_pattern
-
-
-  -- Try to get API from mru cache first
-  -- Find by host header
-  api, matched_host, hosts_list = _M.find_api_by_request_host_with_mru(headers)
-  -- If it was found by Host, return
-  if api then
-    ngx.req.set_header(constants.HEADERS.FORWARDED_HOST, matched_host)
-    return nil, api, matched_host, hosts_list
-  end
-
-  -- Retrieve all APIs
-
-  local apis_dics, err = cache.get_or_set(cache.all_apis_by_dict_key(), _M.load_apis_in_memory)
-  if err then
-    return err
-  end
-
-  -- Find by Host header
-  --api, matched_host, hosts_list = _M.find_api_by_request_host(headers, apis_dics)
-  api, matched_host, hosts_list = _M.find_api_by_request_host_support_mru(headers, apis_dics)
-  -- If it was found by Host, return
-  if api then
-    ngx.req.set_header(constants.HEADERS.FORWARDED_HOST, matched_host)
-    --Add the matched api to mru_cache
-    --Trevor: See if it is a wildcard 
-    local api_host = matched_host
-    local mc_api_key
-    if api_host then
-      mc_api_key = mru_cache.api_key(api_host)
-    else
-      api_host = ngx.req.get_headers()["host"]
-      mc_api_key = mru_cache.api_key(api_host)
-    end
-    ngx.log(ngx.DEBUG, "Trevor: Add an entry in mru_cache for host "..api_host)
-    --mru_cache.set(mc_api_key, api)
-    mru_cache.set_with_expiry(mc_api_key, api, MRU_CACHE_TIMEOUT)   --expire in 600 secs
-   --Add end
-    return nil, api, matched_host, hosts_list
-  end
-
-  -- Otherwise, we look for it by request_path. We have to loop over all APIs and compare the requested URI.
-  api, strip_request_path_pattern = _M.find_api_by_request_path(uri, apis_dics.request_path_arr)
-
-  return nil, api, nil, hosts_list, strip_request_path_pattern
-end
-
-
 local function find_api_with_mru_and_wildcard(uri, headers)
   local api, matched_host, hosts_list, strip_request_path_pattern
 
@@ -485,57 +373,6 @@ local function find_api_with_mru_and_wildcard(uri, headers)
 end
 
 
-
-
---Trevor: Set all APIs in a single cache key: CACHE_KEYS.ALL_APIS_BY_DIC
-local function find_api_with_mru2(uri, headers)
-  local api, matched_host, hosts_list, strip_request_path_pattern
-
-
-  -- Try to get API from mru cache first
-  -- Find by host header
-  api, matched_host, hosts_list = _M.find_api_by_request_host_with_mru2(headers)
-  -- If it was found by Host, return
-  if api then
-    ngx.req.set_header(constants.HEADERS.FORWARDED_HOST, matched_host)
-    return nil, api, matched_host, hosts_list
-  end
-
-  -- Retrieve all APIs
-
-  local apis_dics, err = cache.get_or_set(cache.all_apis_by_dict_key(), _M.load_apis_in_memory)
-  if err then
-    return err
-  end
-
-  -- Find by Host header
-  api, matched_host, hosts_list = _M.find_api_by_request_host(headers, apis_dics)
-  -- If it was found by Host, return
-  if api then
-    ngx.req.set_header(constants.HEADERS.FORWARDED_HOST, matched_host)
-    --Add the matched api to mru_cache
-    local mc_all_apis_key = mru_cache.all_apis_by_dict_key()
-    local mc_all_apis = mru_cache.get(mc_all_apis_key)
-    if mc_all_apis == nil then
-      mc_all_apis = {}
-      mc_all_apis[api.request_host] = api
-    else
-      mc_all_apis[api.request_host] = api
-    end
-    mru_cache.set_with_expiry(mc_all_apis_key, mc_all_apis, MRU_CACHE_TIMEOUT)   --expire in 600 secs
-    ngx.log(ngx.DEBUG, "Trevor: Add an entry in mru_cache of key all_apis for host "..matched_host)
-    --mru_cache.set(mc_api_key, api)
-    mru_cache.set_with_expiry(mc_api_key, api, MRU_CACHE_TIMEOUT)   --expire in 600 secs
-   --Add end
-    return nil, api, matched_host, hosts_list
-  end
-
-  -- Otherwise, we look for it by request_path. We have to loop over all APIs and compare the requested URI.
-  api, strip_request_path_pattern = _M.find_api_by_request_path(uri, apis_dics.request_path_arr)
-
-  return nil, api, nil, hosts_list, strip_request_path_pattern
-end
-
 local function url_has_path(url)
   local _, count_slashes = string_gsub(url, "/", "")
   return count_slashes > 2
@@ -553,8 +390,7 @@ function _M.execute(request_uri, request_headers)
 
   --Trevor: Use mru cache
   --local err, api, matched_host, hosts_list, strip_request_path_pattern = find_api(uri, request_headers)
-  local err, api, matched_host, hosts_list, strip_request_path_pattern = find_api_with_mru(uri, request_headers)
-  --local err, api, matched_host, hosts_list, strip_request_path_pattern = find_api_with_mru_and_wildcard(uri, request_headers)
+  local err, api, matched_host, hosts_list, strip_request_path_pattern = find_api_with_mru_and_wildcard(uri, request_headers)
 
   --local exec_end = ngx.now()
   if err then
